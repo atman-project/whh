@@ -1,0 +1,22 @@
+repos:
+  # Format
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        entry: cargo +nightly fmt --all
+        # Disable passing staged filenames one by one for consistent result
+        pass_filenames: false
+
+  # TOML format/lint
+  - repo: https://github.com/ComPWA/taplo-pre-commit
+    rev: v0.9.3
+    hooks:
+      - id: taplo-format
+      - id: taplo-lint
+
+  # Check unused deps
+  - repo: https://github.com/bnjbvr/cargo-machete
+    rev: v0.9.1
+    hooks:
+      - id: cargo-machete
