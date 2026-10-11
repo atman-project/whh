@@ -6,6 +6,20 @@ pub struct Key {
     site: SiteId,
 }
 
+impl Key {
+    pub fn new(hlc: HybridLogicalClock, site: SiteId) -> Self {
+        Self { hlc, site }
+    }
+
+    pub fn hlc(&self) -> HybridLogicalClock {
+        self.hlc
+    }
+
+    pub fn site(&self) -> SiteId {
+        self.site
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::SystemTime;
@@ -16,7 +30,7 @@ mod tests {
     fn key_order_with_hlc() {
         let hlc1 = HybridLogicalClock::new::<SystemTime>();
         let hlc2 = hlc1.now::<SystemTime>();
-        let site = SiteId::new();
+        let site = SiteId::random();
 
         let key1 = Key { hlc: hlc1, site };
         let key2 = Key { hlc: hlc2, site };
@@ -27,8 +41,8 @@ mod tests {
     #[test]
     fn key_order_with_hlc_tie() {
         let hlc = HybridLogicalClock::new::<SystemTime>();
-        let site1 = SiteId::new();
-        let site2 = SiteId::new();
+        let site1 = SiteId::random();
+        let site2 = SiteId::random();
         let (larger_site, smaller_site) = if site1 < site2 {
             (site2, site1)
         } else {
@@ -50,7 +64,7 @@ mod tests {
     #[test]
     fn key_equality() {
         let hlc = HybridLogicalClock::new::<SystemTime>();
-        let site = SiteId::new();
+        let site = SiteId::random();
 
         let key1 = Key { hlc, site };
         let key2 = Key { hlc, site };

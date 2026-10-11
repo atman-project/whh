@@ -4,7 +4,7 @@ use uuid::Uuid;
 pub struct SiteId([u8; 16]);
 
 impl SiteId {
-    pub fn new() -> Self {
+    pub fn random() -> Self {
         Self(Uuid::new_v4().into_bytes())
     }
 }
