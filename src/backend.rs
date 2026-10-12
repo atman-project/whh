@@ -9,11 +9,12 @@ use crate::{
 pub trait Backend: Sized {
     type Tx: Transaction;
     type Log: log::ReadOnlyLog;
+    type Snapshot;
 
     fn open(space: SpaceId) -> Result<Self, Error>;
     fn begin_tx(&mut self) -> Result<Self::Tx, Error>;
     fn meta(&self) -> Result<Option<Meta>, Error>;
-    fn base(&self) -> Result<Option<Base>, Error>;
+    fn base(&self) -> Result<Option<Base<Self::Snapshot>>, Error>;
     fn log(&self) -> &Self::Log;
 }
 

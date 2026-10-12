@@ -4,13 +4,21 @@ use crate::{log::Key, site::SiteId, space::SpaceId};
 pub struct Meta {
     id: SpaceId,
     site_id: SiteId,
-    watermark: Key,
+    watermark: Option<Key>,
     dirty: bool,
 }
 
 impl Meta {
     pub fn site(&self) -> SiteId {
         self.site_id
+    }
+
+    pub fn watermark(&self) -> Option<&Key> {
+        self.watermark.as_ref()
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
     }
 }
 

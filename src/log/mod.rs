@@ -26,8 +26,18 @@ pub trait ReadOnlyLog {
 }
 
 pub struct Entry<Operation> {
-    pub key: Key,
-    pub op: Operation,
+    key: Key,
+    op: Operation,
+}
+
+impl<Operation> Entry<Operation> {
+    pub fn key(&self) -> &Key {
+        &self.key
+    }
+
+    pub fn operation(&self) -> &Operation {
+        &self.op
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
