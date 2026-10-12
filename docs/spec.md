@@ -753,3 +753,9 @@ It supports `export` and `import` (for example, by serializing the map).
 - **Phase 2.** Compaction (§9), the `Base` message, and the remaining tests.
 
 daddb starts after Week 0.
+
+---
+
+## 21. Next steps
+
+- [Causal delivery and partial replay](causal-delivery.md)
