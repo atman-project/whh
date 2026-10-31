@@ -64,7 +64,7 @@ Two replicas must never share a `SiteId`. If you copy a replica's files to anoth
 
 ### 3.3 Entry, key, and order
 
-```
+```python
 entry = (hlc, site, op)
 key   = (hlc, site)
 ```
@@ -82,7 +82,7 @@ This order is the same on every device. It never depends on when an entry arrive
 
 ### 3.4 State
 
-```
+```python
 state(log) = fold(apply, base.state, entries of log sorted by key)
 ```
 
@@ -126,7 +126,7 @@ In this document, "above the base" means "with a key greater than the base key",
 - upper 48 bits: physical time, in milliseconds since the Unix epoch
 - lower 16 bits: a counter
 
-```
+```python
 pack(ms, counter) = (ms << 16) | counter
 physical(hlc)     = hlc >> 16
 ```
@@ -137,12 +137,12 @@ physical(hlc)     = hlc >> 16
 
 Each site keeps one value, `last`.
 
-```
-now():
+```python
+def now():
     last = max(pack(wall_ms(), 0), last + 1)
     return last
 
-observe(remote_hlc):
+def observe(remote_hlc):
     last = max(last, remote_hlc)
 ```
 
@@ -154,8 +154,9 @@ The wall clock must be injectable (a `Clock` trait), so tests can move time forw
 
 `last` must never go backward, also across restarts. whh does not need to store it separately. On open:
 
-```
-last = max(max hlc in the log, hlc of the base key)   (0 if both are missing)
+```python
+# 0 if both are missing
+last = max(max_hlc(log), base.key.hlc)
 ```
 
 The base key is included because compaction deletes entries, and the deleted entries may have held the highest `hlc`.
@@ -216,7 +217,7 @@ Persistent data per replica:
 |----------|-------------------------------------------------------------------------|----------|
 | `meta`   | `space_id`, `site_id`, `watermark` (a key, or none), `dirty` (bool)    | stored   |
 | `base`   | none, or one base (§3.5) | stored |
-| `log`    | all entries above the base; primary key `(hlc, site)`; an index on `(site, hlc)` is recommended for §8.3 | stored |
+| `log`    | all entries above the base, kept in key order; primary key `(hlc, site)`; an index on `(site, hlc)` is recommended for §8.3 | stored |
 | `failed` | set of `(key, reason)` for entries the machine rejected                 | derived, rebuilt by replay |
 | `state`  | owned by the machine                                                    | derived  |
 
@@ -230,11 +231,13 @@ Persistent data per replica:
 
 ## 7. The machine contract
 
-```
+```python
 apply(state, op) -> Applied | Rejected(reason) | Fatal(error)
-reset(state)     -> make the state empty
-export(state)    -> bytes          // only needed for compaction (§9)
-import(bytes)    -> state          // only needed for compaction (§9)
+reset(state)                  # make the state empty
+
+# only needed for compaction (§9)
+export_state(state) -> bytes
+import_state(bytes) -> state
 ```
 
 Rules:
@@ -244,7 +247,7 @@ Rules:
 3. **`Rejected` and `Fatal` are different things.**
    - `Rejected` means the operation is invalid for the current state. Examples: the table does not exist, or the primary key already exists. This outcome is deterministic. Every replica gets the same result at the same position in the log.
    - `Fatal` means the environment failed. Examples: an I/O error, a full disk, out of memory. This outcome is not deterministic. On `Fatal`, whh aborts the whole transaction and returns the error. Nothing is recorded. The step can be retried later.
-4. **Export and import are exact.** `import(export(s))` must behave exactly like `s` for every later `apply`. For example, a SQL machine on SQLite can export a copy of its database.
+4. **Export and import are exact.** `import_state(export_state(s))` must behave exactly like `s` for every later `apply`. For example, a SQL machine on SQLite can export a copy of its database.
 
 **Why the difference matters.** If a full disk were recorded as `Rejected`, this replica would compute a different state than other replicas for the same log. Only deterministic outcomes may become part of history.
 
@@ -275,16 +278,30 @@ Without `W`, every arrival would need a full replay.
 
 ### 8.2 Local write
 
-```
-write(op):
-    begin transaction
-    settle()                          // §8.5: the state must be current
+```python
+def write(op):
+    begin_transaction()
+
+    # the state must be current (§8.5)
+    settle()
+
+    # always > W, because the new hlc is larger than every observed hlc
     hlc = clock.now()
-    key = (hlc, my_site)              // always > W, since hlc > every observed hlc
+    key = (hlc, my_site)
+
     match machine.apply(op):
-        Applied     -> log.append(key, op); W = key; commit; return Ok(key)
-        Rejected(r) -> rollback; return Err(Rejected(r))   // nothing is logged
-        Fatal(e)    -> rollback; return Err(Fatal(e))
+        case Applied:
+            log.append(key, op)
+            W = key
+            commit()
+            return Ok(key)
+        case Rejected(r):
+            # nothing is logged
+            rollback()
+            return Err(Rejected(r))
+        case Fatal(e):
+            rollback()
+            return Err(Fatal(e))
 ```
 
 **Why settle first.** The writer expects the operation to act on the latest known state. On a stale state, the operation could succeed locally and then fail in the next replay, or the other way around.
@@ -297,9 +314,9 @@ Note: an operation that was applied locally can still be rejected later, when a 
 
 whh does not care about the transport. It defines two messages:
 
-```
-Hello    { protocol: u16, space_id: SpaceId, vv: [(SiteId, u64)] }
-Entries  { entries: [Entry], last: bool }
+```rust
+struct Hello   { protocol: u16, space_id: SpaceId, vv: Vec<(SiteId, u64)> }
+struct Entries { entries: Vec<Entry>, last: bool }
 ```
 
 A session:
@@ -327,26 +344,47 @@ The wire encoding is the implementation's choice (for example, `postcard` with `
 
 Input: a batch of entries from a peer, sorted ascending by key. Ingest only writes the log. It never touches the state. The state is updated by the next `settle`. This way, a sync session causes at most one replay, no matter how big the session is.
 
-```
-ingest(batch):
-    begin transaction
-    blocked = {}                           // sites skipped for the rest of this batch
+```python
+def ingest(batch):
+    begin_transaction()
+    blocked = set()  # sites skipped for the rest of this batch
+
     for e in batch:
-        if base is set and e.key <= base.key: continue          // §9.3: ignored
-        if e.site in blocked: continue
-        if size(e.op) > max_op_bytes or not admit(e):           // §12
-            blocked.add(e.site); report refused(e.site); continue
+        # at or below the base: ignored (§9.3)
+        if base and e.key <= base.key:
+            continue
+
+        # an earlier entry of this site was skipped
+        if e.site in blocked:
+            continue
+
+        # too large, or refused by the app (§12)
+        if size(e.op) > max_op_bytes or not admit(e):
+            blocked.add(e.site)
+            report_refused(e.site)
+            continue
+
+        # already held: it must be an exact duplicate (§11)
         if e.hlc <= vv[e.site]:
-            if log.get(e.key) == Some(e.op): continue            // duplicate, ignore
-            return Violation(e.site)                              // §11; rollback
-        if physical(e.hlc) > wall_ms() + max_future_skew:        // §12
-            blocked.add(e.site); continue                         // deferred, not dropped
+            if log.get(e.key) == e.op:
+                continue
+            rollback()
+            return Violation(e.site)
+
+        # too far in the future: deferred, not dropped (§12)
+        if physical(e.hlc) > wall_ms() + max_future_skew:
+            blocked.add(e.site)
+            continue
+
         log.append(e)
         vv[e.site] = e.hlc
         clock.observe(e.hlc)
-        if W is set and e.key < W:
-            dirty = true
-    commit
+
+        # an old entry: the next settle must replay
+        if W is not None and e.key < W:
+            dirty = True
+
+    commit()
 ```
 
 Each chunk of a sync session (§8.3) can be ingested in its own transaction. The prefix property holds after every commit.
@@ -355,29 +393,41 @@ Each chunk of a sync session (§8.3) can be ingested in its own transaction. The
 
 ### 8.5 Settle
 
-```
-settle():
+```python
+def settle():
     if dirty:
         replay()
-    else:
-        for e in log where e.key > W, ascending:
-            apply_one(e)
-            W = e.key
+        return
 
-apply_one(e):
-    match machine.apply(e.op):
-        Applied     -> ok
-        Rejected(r) -> failed.insert(e.key, r)
-        Fatal(err)  -> abort the transaction, return err
-
-replay():
-    if base is set: machine.import(base.state)
-    else:           machine.reset()
-    failed.clear()
-    for e in log, ascending:
+    # apply the pending entries on top of the current state
+    for e in log.after(W):
         apply_one(e)
-    W = key of the last entry, or base.key if the log is empty (none if neither exists)
-    dirty = false
+        W = e.key
+
+def apply_one(e):
+    match machine.apply(e.op):
+        case Applied:
+            pass
+        case Rejected(r):
+            failed.insert(e.key, r)
+        case Fatal(err):
+            # abort the whole transaction
+            raise err
+
+def replay():
+    # start from the base state
+    if base:
+        machine.import_state(base.state)
+    else:
+        machine.reset()
+    failed.clear()
+
+    for e in log:
+        apply_one(e)
+
+    # the last key in the log, or the base key if the log is empty
+    W = log.last_key() or (base.key if base else None)
+    dirty = False
 ```
 
 Replay runs in one transaction. Readers never see a half-built state. (With SQLite in WAL mode, readers keep seeing the old state until the commit.)
@@ -432,21 +482,35 @@ whh provides only the tools in §9.2 to §9.4. It does not know the devices of a
 
 `compact(K)` creates a new base (§3.5) with base key `K`. Its base state is exported by the machine (§7).
 
-```
-compact(K):
-    begin transaction
+```python
+def compact(K):
+    begin_transaction()
     settle()
-    if base is set and K <= base.key: rollback; return Err(NotNewer)
-    if W is none or K > W:              rollback; return Err(NotApplied)
-    // rebuild the state up to K, export it, then continue to the end
-    if base is set: machine.import(base.state) else machine.reset()
+
+    if base and K <= base.key:
+        rollback()
+        return Err(NotNewer)
+    if W is None or K > W:
+        rollback()
+        return Err(NotApplied)
+
+    # rebuild the state up to K, and export it
+    if base:
+        machine.import_state(base.state)
+    else:
+        machine.reset()
     failed.clear()
-    for e in log where e.key <= K, ascending: apply_one(e)
-    snapshot = machine.export()
-    for e in log where e.key > K, ascending: apply_one(e)
-    base = (K, my_site, snapshot)
-    delete every log entry with key <= K
-    commit
+    for e in log.up_to(K):
+        apply_one(e)
+    snapshot = machine.export_state()
+
+    # continue to the end, so that the live state is current again
+    for e in log.after(K):
+        apply_one(e)
+
+    base = Base(key=K, by=my_site, state=snapshot)
+    log.delete_up_to(K)
+    commit()
 ```
 
 After `compact`, the state is unchanged: it was already `base_state` plus the entries above `K`.
@@ -474,20 +538,37 @@ The base spreads through sync (§8.3). Compaction extends the sync protocol in t
 
 A replica that receives a newer base adopts it:
 
-```
-adopt(b):
-    begin transaction
-    if physical(b.key.hlc) > wall_ms() + max_future_skew: rollback; defer   // §12
-    if base is set:
-        if b.key < base.key: rollback; return                    // older; ignore
+```python
+def adopt(b):
+    begin_transaction()
+
+    # too far in the future: deferred (§12)
+    if physical(b.key.hlc) > wall_ms() + max_future_skew:
+        rollback()
+        return Deferred
+
+    if base:
+        # an older base: ignore
+        if b.key < base.key:
+            rollback()
+            return
+
         if b.key == base.key:
-            if b.by != base.by: rollback; return Err(ConflictingBase)
-            rollback; return                                      // same base; ignore
+            # the same key from another administrator
+            if b.by != base.by:
+                rollback()
+                return Err(ConflictingBase)
+            # the same base: ignore
+            rollback()
+            return
+
     base = b
-    delete every log entry with key <= b.key
+    log.delete_up_to(b.key)
     clock.observe(b.key.hlc)
-    dirty = true                                                  // replay from the new base
-    commit
+
+    # the next settle replays from the new base
+    dirty = True
+    commit()
 ```
 
 Any replica can forward a base, not only the administrator. The base is the same everywhere, because only the administrator creates bases.
@@ -719,7 +800,7 @@ Each of these must be checked by tests.
 - `Delete(k)`: rejected if `k` does not exist
 - A fault switch (not an operation): when set, the next `apply` returns `Fatal`. Used only in fault-injection tests.
 
-It supports `export` and `import` (for example, by serializing the map).
+It supports `export_state` and `import_state` (for example, by serializing the map).
 
 ### 19.2 Unit tests
 
