@@ -474,7 +474,7 @@ A session:
 1. Both sides send `Hello`.
 2. If `protocol` or `space_id` differ, close the session.
 3. If this side's base is newer than the peer's (the peer has none, or a smaller key), it sends `Base` first.
-4. Each side computes what the peer is missing. For each site `s` in its own `vv`, it selects the entries of `s` with `hlc > peer_vv[s]` (use 0 if the peer does not list `s`) and with key above the peer's base. It sends them sorted by key, in chunks of at most `max_entries_per_message`. The final chunk has `last = true`.
+4. Each side scans its log in key order and sends every entry the peer does not have yet. An entry `e` is sent if `e.hlc > peer_vv[e.site]` (use 0 if the peer does not list `e.site`) and its key is above the peer's base. Entries are sent in chunks of at most `max_entries_per_message`. The final chunk has `last = true`.
 5. Each side adopts a received `Base` (§9.4) and ingests every chunk it receives (§8.3).
 6. When it has sent its own last chunk and ingested the peer's last chunk, it runs `settle` (§8.4).
 
@@ -578,8 +578,8 @@ whh guarantees that replicas converge. It says nothing about which writes are go
 
 ## 16. Possible later work (not now)
 
-- **Partial replay** (for example, per table), if measurements show full replay is too slow. This would require the machine to declare which parts each operation touches.
-- **Checkpoints above the base.** Cache the state at some key above the base, and throw the cache away when a late entry lands before it.
+- **Partial replay** (for example, per table), if measurements show full replay is too slow. This would require the machine to declare which parts (e.g., tables) each operation reads and writes.
+- **Checkpoints above the base.** Cache the state at some key above the base, and throw the cache away when a late entry lands before it. Then a replay can start from one of the checkpoints instead of from the base.
 - **Detecting lost writes.** Attach the administrator's version vector to the base, so a device can tell which of its entries were not included (§9.5). Left out for now on purpose.
 - **Measurement.** Replay time for 10⁴, 10⁵, and 10⁶ entries, with a toy machine and with daddb.
 
@@ -753,9 +753,3 @@ It supports `export` and `import` (for example, by serializing the map).
 - **Phase 2.** Compaction (§9), the `Base` message, and the remaining tests.
 
 daddb starts after Week 0.
-
----
-
-## 21. Next steps
-
-- [Causal delivery and partial replay](causal-delivery.md)
