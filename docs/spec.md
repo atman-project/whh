@@ -293,7 +293,7 @@ write(op):
 
 Note: an operation that was applied locally can still be rejected later, when a late entry lands before it (§8.6). This is the only way a write can fail after the fact. Separately, a write can be lost if the app compacts past it before this replica has synced it (§9.5).
 
-### 8.3 Sync protocol
+### 8.3 Sync
 
 whh does not care about the transport. It defines two messages:
 
