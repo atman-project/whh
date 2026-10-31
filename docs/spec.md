@@ -319,7 +319,7 @@ ingest(batch):
     commit
 ```
 
-Each chunk of a sync session can be ingested in its own transaction. The prefix property holds after every commit.
+Each chunk of a sync session (§10) can be ingested in its own transaction. The prefix property holds after every commit.
 
 **Why skip the rest of a site's entries after one is skipped.** Taking a later entry of the same site would create a gap and break the prefix property (§5.1). The skipped entries are not lost. The sender will send them again in a later session.
 
@@ -498,7 +498,7 @@ Properties:
 - **One round is enough.** After one complete session (with no deferred entries and no new writes during it), both sides hold the same base and the same set of entries above it.
 - **A new device needs no full history.** It receives the base and the entries above it.
 
-Sending in global key order is stricter than needed. Only ascending order per site is required. Global key order also puts late entries first in a batch, which is convenient for §8.3.
+**Why entries are sent in key order.** Whh assumes that every entry may depend on every entry with a smaller key, whatever site wrote it. This is why entries are sent in key order. Each chunk is committed in its own transaction (§8.3), so a receiver may stop in the middle of a session. Even then, it never holds an entry without the entries it may depend on.
 
 The `Base` message can be large, because it holds the whole state. The transport may stream it.
 
