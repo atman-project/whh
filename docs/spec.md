@@ -283,7 +283,7 @@ Note: an operation that was applied locally can still be rejected later, when a 
 
 ### 8.3 Ingest
 
-Input: a batch of entries from a peer, sorted ascending by key. Ingest only writes the log. It never touches the state.
+Input: a batch of entries from a peer, sorted ascending by key. Ingest only writes the log. It never touches the state. The state is updated by the next `settle`. This way, a sync session causes at most one replay, no matter how big the session is.
 
 ```
 ingest(batch):
