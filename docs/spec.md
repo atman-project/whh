@@ -278,6 +278,8 @@ Without `W`, every arrival would need a full replay.
 
 ### 8.2 Local write
 
+A **local write** applies an operation to the local state and appends it to the log as a new entry.
+
 ```python
 def write(op):
     begin_transaction()
@@ -312,6 +314,8 @@ Note: an operation that was applied locally can still be rejected later, when a 
 
 ### 8.3 Sync
 
+**Sync** is a session between two replicas in which each side sends the entries that the other side does not have.
+
 whh does not care about the transport. It defines two messages:
 
 ```rust
@@ -341,6 +345,8 @@ Properties:
 The wire encoding is the implementation's choice (for example, `postcard` with `serde`). It must include the `protocol` number.
 
 ### 8.4 Ingest
+
+**Ingest** stores the entries received from a peer in the log.
 
 Input: a batch of entries from a peer, sorted ascending by key. Ingest only writes the log. It never touches the state. The state is updated by the next `settle`. This way, a sync session causes at most one replay, no matter how big the session is.
 
@@ -392,6 +398,8 @@ Each chunk of a sync session (§8.3) can be ingested in its own transaction. The
 **Why skip the rest of a site's entries after one is skipped.** Taking a later entry of the same site would create a gap and break the prefix property (§5.1). The skipped entries are not lost. The sender will send them again in a later session.
 
 ### 8.5 Settle
+
+**Settle** brings the state up to date with the log.
 
 ```python
 def settle():

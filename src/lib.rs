@@ -58,7 +58,8 @@ where
         Ok(hlc)
     }
 
-    /// Local write
+    /// A local write applies an operation to the local state and appends it to
+    /// the log as a new entry.
     pub fn write(&mut self, op: Operation) -> Result<Key, Error> {
         let mut tx = self.backend.begin_tx()?;
 
@@ -81,6 +82,7 @@ where
         }
     }
 
+    /// Brings the state up to date with the log.
     pub fn settle(&mut self) -> Result<(), Error> {
         if self.backend.meta()?.expect("meta must exist").is_dirty() {
             self.replay()
