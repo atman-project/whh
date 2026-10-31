@@ -4,7 +4,7 @@
 
 - Status: Draft
 - Date: 2026-10-31
-- Scope: the `whh` crate only. `daddb` (operations = SQL statements) is a separate spec.
+- Scope: the `whh` crate only.
 - Changes from draft 1: compaction is added (§9). Finality is an app decision, not a whh feature. whh only provides the minimal tools the app needs to compact a space.
 
 ---
@@ -19,7 +19,7 @@ whh does this with an **operation log**. Every write is recorded as an entry in 
 
 > All replicas that have the same operations reach the same state, as long as every operation is deterministic.
 
-whh does not know what an operation means. To whh, an operation is an opaque byte string. The meaning comes from a **machine** that the app provides. The first machine will be `daddb`, where each operation is one SQL statement. whh itself knows nothing about SQL.
+whh does not know what an operation means. To whh, an operation is an opaque byte string. The meaning comes from a **machine** that the app provides. For example, a **SQL machine** treats each operation as one SQL statement. whh itself knows nothing about SQL.
 
 whh never decides on its own that part of history is final. If the app knows that an old part of the log will not change anymore, it can tell whh to **compact** the log up to that point (§9).
 
@@ -92,7 +92,7 @@ This is the whole definition. Every other rule in this document exists to comput
 
 **Why an operation log, not a state-based CRDT.**
 
-1. Any operation can be replicated, including operations that change structure. For daddb these are `CREATE TABLE` and `ALTER TABLE`. Structure cannot be merged as a state-based CRDT, because there must be exactly one structure, not several in parallel. In a log, a structure change is just one more entry.
+1. Any operation can be replicated, including operations that change structure. For a SQL machine, these are `CREATE TABLE` and `ALTER TABLE`. Structure cannot be merged as a state-based CRDT, because there must be exactly one structure, not several in parallel. In a log, a structure change is just one more entry.
 2. The state stays plain. The machine stores only its own data, with no per-field clocks and no tombstones.
 3. Merging is set union. It cannot fail and needs no conflict rules.
 4. It needs much less code.
@@ -101,7 +101,7 @@ This is the whole definition. Every other rule in this document exists to comput
 
 **Why a total order instead of commutative operations.** Classic operation-based CRDTs need operations that commute. SQL statements do not commute. A fixed total order removes this need: every replica applies the same entries in the same order, so any deterministic machine converges. The cost is that a late entry may force the entries after it to be applied again (§8.4).
 
-**Conflicts are resolved by the order.** When two entries touch the same thing, the entry with the larger key wins, because it is applied later. For daddb, two `UPDATE`s of the same column resolve as last-writer-wins by HLC. whh needs no other conflict rule.
+**Conflicts are resolved by the order.** When two entries touch the same thing, the entry with the larger key wins, because it is applied later. For a SQL machine, two `UPDATE`s of the same column resolve as last-writer-wins by HLC. whh needs no other conflict rule.
 
 ### 3.5 Base
 
@@ -222,7 +222,7 @@ Persistent data per replica:
 
 `vv` and the HLC value `last` are derived from the log and the base. They may be cached.
 
-**Atomicity requirement.** The log, `meta`, `base`, `failed`, and the machine state must be changed in **one transaction**. Each step in §8 and §9 either commits fully or not at all. For daddb this comes for free, because all of them live in the same SQLite file.
+**Atomicity requirement.** The log, `meta`, `base`, `failed`, and the machine state must be changed in **one transaction**. Each step in §8 and §9 either commits fully or not at all. For example, a backend that keeps all of them in one SQLite file gets this for free.
 
 **Why.** A local write applies an operation to the state and appends it to the log. If a crash could keep one without the other, this replica's state would contain an operation that no other replica will ever receive. The replicas would then diverge without anyone noticing.
 
@@ -244,7 +244,7 @@ Rules:
 3. **`Rejected` and `Fatal` are different things.**
    - `Rejected` means the operation is invalid for the current state. Examples: the table does not exist, or the primary key already exists. This outcome is deterministic. Every replica gets the same result at the same position in the log.
    - `Fatal` means the environment failed. Examples: an I/O error, a full disk, out of memory. This outcome is not deterministic. On `Fatal`, whh aborts the whole transaction and returns the error. Nothing is recorded. The step can be retried later.
-4. **Export and import are exact.** `import(export(s))` must behave exactly like `s` for every later `apply`. For daddb, the bytes are a copy of the SQLite database.
+4. **Export and import are exact.** `import(export(s))` must behave exactly like `s` for every later `apply`. For example, a SQL machine on SQLite can export a copy of its database.
 
 **Why the difference matters.** If a full disk were recorded as `Rejected`, this replica would compute a different state than other replicas for the same log. Only deterministic outcomes may become part of history.
 
@@ -357,7 +357,7 @@ Replay runs in one transaction. Readers never see a half-built state. (With SQLi
 **Why replay the whole space.**
 
 1. It is simple. There is one `W` and one `dirty` flag per space.
-2. An operation may touch any part of the state. For daddb this means joins, `INSERT ... SELECT`, and transactions over several tables are all allowed. Replaying only one part would require knowing which parts each operation touches. Replaying everything needs no such knowledge.
+2. An operation may touch any part of the state. For a SQL machine, this means joins, `INSERT ... SELECT`, and transactions over several tables are all allowed. Replaying only one part would require knowing which parts each operation touches. Replaying everything needs no such knowledge.
 3. It is fast enough at the expected scale. Teller writes about 100 entries per day. Two years is about 73,000 entries, about 15 MB. This should replay in well under a second. This must be measured (§16). Compaction (§9) also shortens replay, because replay starts from the base.
 
 **Why replay starts only from the base, and not from other snapshots.** A late entry can land anywhere above the base. A snapshot taken above the base would then be wrong and would have to be rebuilt. Keeping such snapshots correct costs more code than it saves time at this scale. The base is different: entries at or below it are ignored (§9.3), so nothing can make it wrong.
@@ -569,8 +569,8 @@ Two consequences:
 
 whh guarantees that replicas converge. It says nothing about which writes are good.
 
-- **Machine (daddb).** Determinism. Reject non-deterministic operations at write time (for daddb: `random()`, `datetime('now')`, `AUTOINCREMENT`, and similar). The app supplies ids and timestamps as values. Atomicity per operation. Exact export and import of state, if compaction is used.
-- **App: key design.** Primary keys must not collide across sites. Use ids that each site generates on its own: a UUID, or `SiteId` plus a local counter. If two sites insert the same key, one wins and the other is rejected, possibly after the fact (§8.5). Compaction does not fix this: two inserts above the base collide in the same way. daddb should refuse table definitions with collision-prone keys as a guardrail.
+- **Machine.** Determinism. Reject non-deterministic operations at write time (for a SQL machine: `random()`, `datetime('now')`, `AUTOINCREMENT`, and similar). The app supplies ids and timestamps as values. Atomicity per operation. Exact export and import of state, if compaction is used.
+- **App: key design.** Primary keys must not collide across sites. Use ids that each site generates on its own: a UUID, or `SiteId` plus a local counter. If two sites insert the same key, one wins and the other is rejected, possibly after the fact (§8.5). Compaction does not fix this: two inserts above the base collide in the same way. A SQL machine can refuse table definitions with collision-prone keys as a guardrail.
 - **App: finality.** Who the administrator is, when to compact, and up to which key (§9.1). Whether it is safe to compact is the app's judgment.
 - **Permission layer.** Who may write what in a shared space, who may compact it, and signatures. whh accepts any well-formed entry as valid history, including a malicious one, such as a backdated `DROP TABLE`. Such entries must be refused before ingest (through `admit`, §13.2), or the space must not be shared with untrusted peers.
 - **Transport (for example, iroh).** Connections, peer discovery, encryption in transit.
@@ -593,7 +593,7 @@ whh guarantees that replicas converge. It says nothing about which writes are go
 - **Partial replay** (for example, per table), if measurements show full replay is too slow. This would require the machine to declare which parts (e.g., tables) each operation reads and writes.
 - **Checkpoints above the base.** Cache the state at some key above the base, and throw the cache away when a late entry lands before it. Then a replay can start from one of the checkpoints instead of from the base.
 - **Detecting lost writes.** Attach the administrator's version vector to the base, so a device can tell which of its entries were not included (§9.5). Left out for now on purpose.
-- **Measurement.** Replay time for 10⁴, 10⁵, and 10⁶ entries, with a toy machine and with daddb.
+- **Measurement.** Replay time for 10⁴, 10⁵, and 10⁶ entries, with a toy machine and with a SQL machine.
 
 ---
 
@@ -685,7 +685,7 @@ whh ships two things for testing:
 - `MemBackend`: an in-memory backend that implements the transaction rules.
 - `KvMachine`: a small deterministic machine with export and import (see §20).
 
-The SQLite backend and the SQL machine belong to daddb, not to whh.
+Real backends and machines (for example, a SQLite backend and a SQL machine) live outside whh.
 
 ---
 
@@ -763,5 +763,3 @@ It supports `export` and `import` (for example, by serializing the map).
 
 - **Week 0.** The `whh` crate with `Replica`, `MemBackend`, `KvMachine`, §8 without the base, and the tests in §20.2, §20.3, and §20.5 without `compact`.
 - **Phase 2.** Compaction (§9), the `Base` message, and the remaining tests.
-
-daddb starts after Week 0.
