@@ -42,9 +42,9 @@ whh never decides on its own that part of history is final. If the app knows tha
 - Finality decided by whh. When history is final is an app decision (§9.1). whh does not run consensus, track membership, or check whether the app's decision is right.
 - Verifying snapshots. A replica trusts the base it receives, just as it trusts that other replicas apply the log correctly.
 - Membership. Adding or removing devices is not a whh concept.
-- Authentication, authorization, encryption, transport. These belong to other layers (§14).
+- Authentication, authorization, encryption, transport. These belong to other layers (§13).
 - Character-level merging of text for real-time co-editing.
-- Replaying only part of the state (for example, one table). This may come later (§16).
+- Replaying only part of the state (for example, one table). This may come later (§15).
 
 ---
 
@@ -60,7 +60,7 @@ A **space** is the unit of replication. One space has one log and one state. Syn
 
 A **site** is one replica of one space on one device. Each site has a `SiteId`: 16 random bytes, created when the replica is created. A site writes entries only under its own `SiteId`.
 
-Two replicas must never share a `SiteId`. If you copy a replica's files to another device and open them there, both copies have the same `SiteId`. This breaks convergence (§12). A new device must create a new replica with a new `SiteId`, and fill it through normal sync.
+Two replicas must never share a `SiteId`. If you copy a replica's files to another device and open them there, both copies have the same `SiteId`. This breaks convergence (§11). A new device must create a new replica with a new `SiteId`, and fill it through normal sync.
 
 ### 3.3 Entry, key, and order
 
@@ -99,7 +99,7 @@ This is the whole definition. Every other rule in this document exists to comput
 
 **Why this is still a CRDT.** The replicated object is the set of entries. Union is commutative, associative, and idempotent, so the set is a grow-only set CRDT. The state is a pure function of that set. This pattern is known as a *pure operation-based CRDT* (Baquero, Almeida, Shoker). Automerge and Yjs follow the same idea internally.
 
-**Why a total order instead of commutative operations.** Classic operation-based CRDTs need operations that commute. SQL statements do not commute. A fixed total order removes this need: every replica applies the same entries in the same order, so any deterministic machine converges. The cost is that a late entry may force the entries after it to be applied again (§8.4).
+**Why a total order instead of commutative operations.** Classic operation-based CRDTs need operations that commute. SQL statements do not commute. A fixed total order removes this need: every replica applies the same entries in the same order, so any deterministic machine converges. The cost is that a late entry may force the entries after it to be applied again (§8.5).
 
 **Conflicts are resolved by the order.** When two entries touch the same thing, the entry with the larger key wins, because it is applied later. For a SQL machine, two `UPDATE`s of the same column resolve as last-writer-wins by HLC. whh needs no other conflict rule.
 
@@ -111,7 +111,7 @@ A **base** is the record that compaction creates (§9). It has three parts:
 - `base.by`: the `SiteId` of the replica that created the base.
 - `base.state`: the **base state**. It is the machine state after applying every entry with key `<= base.key`, in key order, starting from the empty state.
 
-A replica has at most one base. If it has none, the base state is the empty state, and there is no base key.
+A replica has at most one base. A newer base (larger base key) replaces an older one. If it has none, the base state is the empty state, and there is no base key.
 
 In this document, "above the base" means "with a key greater than the base key", and "at or below the base" means "with a key less than or equal to the base key". The log never holds an entry at or below the base.
 
@@ -178,7 +178,7 @@ The **version vector** `vv` maps each `SiteId` to the highest `hlc` held from th
 
 **Version vector vs. replay.** These solve different problems. The version vector makes sure no entry is missed. Replay makes sure the received entries are applied in the right order. An entry can be new for its own site (above `vv[site]`, so it is sent) and old for the whole log (below `W`, so it triggers a replay). Both are true at the same time.
 
-**After compaction.** Compaction deletes entries, so `vv[s]` may drop, even to 0. This is fine and needs no extra storage. `Hello` also carries the base key, and the sender never sends entries at or below the peer's base (§10).
+**After compaction.** Compaction deletes entries, so `vv[s]` may drop, even to 0. This is fine and needs no extra storage. `Hello` also carries the base key, and the sender never sends entries at or below the peer's base (§8.3).
 
 ### 5.1 The prefix property
 
@@ -187,8 +187,8 @@ The **version vector** `vv` maps each `SiteId` to the highest `hlc` held from th
 This holds because:
 
 1. A site's own entries have strictly increasing `hlc` (§4).
-2. Senders send entries in ascending key order, so each site's entries are sent in ascending order (§10).
-3. Receivers ingest in order. For each site, they stop at the first entry they cannot take (§8.3, §13).
+2. Senders send entries in ascending key order, so each site's entries are sent in ascending order (§8.3).
+3. Receivers ingest in order. For each site, they stop at the first entry they cannot take (§8.4, §12).
 4. Compaction only removes entries at or below the base. What is left above the base has no gaps.
 
 Because of the prefix property, `vv[s]` alone says exactly which entries of `s` above the base a replica has: all entries with `hlc <= vv[s]`, and none above.
@@ -215,8 +215,8 @@ Persistent data per replica:
 | Data     | Content                                                                 | Kind     |
 |----------|-------------------------------------------------------------------------|----------|
 | `meta`   | `space_id`, `site_id`, `watermark` (a key, or none), `dirty` (bool)    | stored   |
-| `base`   | none, or `(key, by, state)`: the compaction point, the site that made it, and the machine state at that point (§9.2) | stored |
-| `log`    | all entries above the base; primary key `(hlc, site)`; an index on `(site, hlc)` is recommended for §10 | stored |
+| `base`   | none, or one base (§3.5) | stored |
+| `log`    | all entries above the base; primary key `(hlc, site)`; an index on `(site, hlc)` is recommended for §8.3 | stored |
 | `failed` | set of `(key, reason)` for entries the machine rejected                 | derived, rebuilt by replay |
 | `state`  | owned by the machine                                                    | derived  |
 
@@ -248,7 +248,7 @@ Rules:
 
 **Why the difference matters.** If a full disk were recorded as `Rejected`, this replica would compute a different state than other replicas for the same log. Only deterministic outcomes may become part of history.
 
-**Machine versions.** If the machine's behavior changes between software versions, replicas on different versions may compute different states from the same log. The same is true for the format of exported state. Handling this is an open item (§17).
+**Machine versions.** If the machine's behavior changes between software versions, replicas on different versions may compute different states from the same log. The same is true for the format of exported state. Handling this is an open item (§16).
 
 ---
 
@@ -260,7 +260,7 @@ The **watermark** `W` is the key of the last entry applied to the state. After c
 
 > **Invariant.** When `dirty` is false, the state equals the fold of all log entries with key `<= W`, in key order, starting from `base_state`.
 
-Entries with key `> W` may exist in the log without being applied yet. They are pending, and the next settle (§8.4) applies them.
+Entries with key `> W` may exist in the log without being applied yet. They are pending, and the next settle (§8.5) applies them.
 
 `dirty = true` means the log holds at least one entry with key `< W` that the state does not reflect, or the base was replaced (§9.4). The state is then stale, and only a full replay fixes it.
 
@@ -278,7 +278,7 @@ Without `W`, every arrival would need a full replay.
 ```
 write(op):
     begin transaction
-    settle()                          // §8.4: the state must be current
+    settle()                          // §8.5: the state must be current
     hlc = clock.now()
     key = (hlc, my_site)              // always > W, since hlc > every observed hlc
     match machine.apply(op):
@@ -291,9 +291,39 @@ write(op):
 
 **Why a rejected local operation is not logged.** The author gets the error at once and can fix it. Logging it would only add noise to every replica's log.
 
-Note: an operation that was applied locally can still be rejected later, when a late entry lands before it (§8.5). This is the only way a write can fail after the fact. Separately, a write can be lost if the app compacts past it before this replica has synced it (§9.5).
+Note: an operation that was applied locally can still be rejected later, when a late entry lands before it (§8.6). This is the only way a write can fail after the fact. Separately, a write can be lost if the app compacts past it before this replica has synced it (§9.5).
 
-### 8.3 Ingest
+### 8.3 Sync protocol
+
+whh does not care about the transport. It defines two messages:
+
+```
+Hello    { protocol: u16, space_id: SpaceId, vv: [(SiteId, u64)] }
+Entries  { entries: [Entry], last: bool }
+```
+
+A session:
+
+1. Both sides send `Hello`.
+2. If `protocol` or `space_id` differ, close the session.
+3. Each side scans its log in key order and sends every entry the peer does not have yet. An entry `e` is sent if `e.hlc > peer_vv[e.site]` (use 0 if the peer does not list `e.site`). Entries are sent in chunks of at most `max_entries_per_message`. The final chunk has `last = true`.
+4. Each side ingests every chunk it receives (§8.4).
+5. When it has sent its own last chunk and ingested the peer's last chunk, it runs `settle` (§8.5).
+
+Compaction adds the base key to `Hello` and one more message, `Base` (§9.4).
+
+Properties:
+
+- **Stateless.** Nothing about a session is stored. To resume, start a new session with a new `Hello`.
+- **Safe to interrupt** at any point. Every committed chunk keeps the prefix property.
+- **Idempotent.** Running a session twice changes nothing the second time.
+- **One round is enough.** After one complete session (with no deferred entries and no new writes during it), both sides hold the same set of entries.
+
+**Why entries are sent in key order.** whh assumes that every entry may depend on every entry with a smaller key, whatever site wrote it. This is why entries are sent in key order. Each chunk is committed in its own transaction (§8.4), so a receiver may stop in the middle of a session. Even then, it never holds an entry without the entries it may depend on.
+
+The wire encoding is the implementation's choice (for example, `postcard` with `serde`). It must include the `protocol` number.
+
+### 8.4 Ingest
 
 Input: a batch of entries from a peer, sorted ascending by key. Ingest only writes the log. It never touches the state. The state is updated by the next `settle`. This way, a sync session causes at most one replay, no matter how big the session is.
 
@@ -304,12 +334,12 @@ ingest(batch):
     for e in batch:
         if base is set and e.key <= base.key: continue          // §9.3: ignored
         if e.site in blocked: continue
-        if size(e.op) > max_op_bytes or not admit(e):           // §13
+        if size(e.op) > max_op_bytes or not admit(e):           // §12
             blocked.add(e.site); report refused(e.site); continue
         if e.hlc <= vv[e.site]:
             if log.get(e.key) == Some(e.op): continue            // duplicate, ignore
-            return Violation(e.site)                              // §12; rollback
-        if physical(e.hlc) > wall_ms() + max_future_skew:        // §13
+            return Violation(e.site)                              // §11; rollback
+        if physical(e.hlc) > wall_ms() + max_future_skew:        // §12
             blocked.add(e.site); continue                         // deferred, not dropped
         log.append(e)
         vv[e.site] = e.hlc
@@ -319,11 +349,11 @@ ingest(batch):
     commit
 ```
 
-Each chunk of a sync session (§10) can be ingested in its own transaction. The prefix property holds after every commit.
+Each chunk of a sync session (§8.3) can be ingested in its own transaction. The prefix property holds after every commit.
 
 **Why skip the rest of a site's entries after one is skipped.** Taking a later entry of the same site would create a gap and break the prefix property (§5.1). The skipped entries are not lost. The sender will send them again in a later session.
 
-### 8.4 Settle
+### 8.5 Settle
 
 ```
 settle():
@@ -358,11 +388,11 @@ Replay runs in one transaction. Readers never see a half-built state. (With SQLi
 
 1. It is simple. There is one `W` and one `dirty` flag per space.
 2. An operation may touch any part of the state. For a SQL machine, this means joins, `INSERT ... SELECT`, and transactions over several tables are all allowed. Replaying only one part would require knowing which parts each operation touches. Replaying everything needs no such knowledge.
-3. It is fast enough at the expected scale. Teller writes about 100 entries per day. Two years is about 73,000 entries, about 15 MB. This should replay in well under a second. This must be measured (§16). Compaction (§9) also shortens replay, because replay starts from the base.
+3. It is fast enough at the expected scale. Teller writes about 100 entries per day. Two years is about 73,000 entries, about 15 MB. This should replay in well under a second. This must be measured (§15). Compaction (§9) also shortens replay, because replay starts from the base.
 
 **Why replay starts only from the base, and not from other snapshots.** A late entry can land anywhere above the base. A snapshot taken above the base would then be wrong and would have to be rebuilt. Keeping such snapshots correct costs more code than it saves time at this scale. The base is different: entries at or below it are ignored (§9.3), so nothing can make it wrong.
 
-### 8.5 Report
+### 8.6 Report
 
 Every `settle` returns a report, so the app can tell the user what changed:
 
@@ -375,7 +405,7 @@ Every `settle` returns a report, so the app can tell the user what changed:
 
 **A rejection is not permanent.** The `failed` set is rebuilt from scratch on every replay. An entry rejected at one position may succeed once a late entry lands before it. Example: an `UPDATE` of a column that does not exist yet is rejected. Later, the `ALTER TABLE` that adds the column arrives, and it has a smaller key. On replay, the `UPDATE` succeeds.
 
-**Why failures are reported, not hidden.** Example: two sites insert rows with the same primary key. The entry with the smaller key wins. After replay, the other insert is rejected, and the row its author saw disappears. whh cannot prevent this; it is a key design problem for the app (§14). But whh must make it visible. An entry in `newly_failed` whose site is the local site means: "one of your own writes was undone by history." The app should tell the user.
+**Why failures are reported, not hidden.** Example: two sites insert rows with the same primary key. The entry with the smaller key wins. After replay, the other insert is rejected, and the row its author saw disappears. whh cannot prevent this; it is a key design problem for the app (§13). But whh must make it visible. An entry in `newly_failed` whose site is the local site means: "one of your own writes was undone by history." The app should tell the user.
 
 ---
 
@@ -398,15 +428,9 @@ whh provides only the tools in §9.2 to §9.4. It does not know the devices of a
 
 **Why the app, not whh.** Deciding finality inside whh needs either agreement among all devices (one rarely used device then blocks everyone) or rules for concurrent decisions by several devices. Both add a lot of complexity. The app knows things whh cannot know: which devices exist, who is in charge, and how careful to be. With a single trusted administrator, the whh side becomes very small.
 
-### 9.2 The base and `compact`
+### 9.2 `compact`
 
-A **base** is `(key, by, state)`:
-
-- `key`: the compaction point `K`
-- `by`: the `SiteId` of the administrator that created it
-- `state`: the exported machine state after applying every entry with key `<= K` (§7)
-
-A replica has at most one base. A newer base (larger key) replaces an older one.
+`compact(K)` creates a new base (§3.5) with base key `K`. Its base state is exported by the machine (§7).
 
 ```
 compact(K):
@@ -429,20 +453,29 @@ After `compact`, the state is unchanged: it was already `base_state` plus the en
 
 ### 9.3 Entries at or below the base
 
-Ingest ignores every entry with key `<= base.key` (§8.3). Such an entry is not stored, not applied, and causes no replay.
+Ingest ignores every entry with key `<= base.key` (§8.4). Such an entry is not stored, not applied, and causes no replay.
 
 **Why this is safe.** The administrator promised that every such entry is already part of the base. So ignoring it loses nothing, if the promise holds.
 
-**Why this also helps.** A misbehaving peer can no longer cause replays with backdated entries below the base (§15).
+**Why this also helps.** A misbehaving peer can no longer cause replays with backdated entries below the base (§14).
 
 ### 9.4 Spreading the base
 
-The base spreads through normal sync (§10). A replica that receives a newer base adopts it:
+The base spreads through sync (§8.3). Compaction extends the sync protocol in three places:
+
+- `Hello` also carries the base key: `Hello { protocol, space_id, base: Option<Key>, vv }`.
+- A new message carries the base: `Base { key: Key, by: SiteId, state: bytes }`.
+- In a session:
+  - After `Hello`, if this side's base is newer than the peer's (the peer has none, or a smaller key), it sends `Base` before any entries.
+  - When it selects entries to send, it also skips every entry at or below the peer's base key.
+  - The receiver adopts a received `Base` before it ingests the entries that follow.
+
+A replica that receives a newer base adopts it:
 
 ```
 adopt(b):
     begin transaction
-    if physical(b.key.hlc) > wall_ms() + max_future_skew: rollback; defer   // §13
+    if physical(b.key.hlc) > wall_ms() + max_future_skew: rollback; defer   // §12
     if base is set:
         if b.key < base.key: rollback; return                    // older; ignore
         if b.key == base.key:
@@ -459,6 +492,10 @@ Any replica can forward a base, not only the administrator. The base is the same
 
 **`ConflictingBase`.** Two different bases with the same key can only come from two administrators. This breaks the rule in §9.1, and the replicas would diverge without notice. whh reports it instead of choosing one. It is a cheap guard, not a full check: bases with different keys from two administrators are not detected.
 
+With these changes, after one complete session both sides hold the same base and the same set of entries above it. A new device needs no full history: it receives the base and the entries above it.
+
+The `Base` message can be large, because it holds the whole state. The transport may stream it.
+
 ### 9.5 If the app is wrong
 
 If the administrator compacts while some device still holds an entry with key `<= K` that the administrator did not have, that entry is **lost**:
@@ -467,46 +504,11 @@ If the administrator compacts while some device still holds an entry with key `<
 - Every replica ignores it once it has the base (§9.3).
 - The device that held it deletes it when it adopts the base (§9.4), and it cannot tell that the entry was not included.
 
-Replicas still converge, because all of them end with the same base and the same entries above it. Only the lost write is gone. This is the accepted cost of keeping finality simple (§15).
+Replicas still converge, because all of them end with the same base and the same entries above it. Only the lost write is gone. This is the accepted cost of keeping finality simple (§14).
 
 ---
 
-## 10. Sync protocol
-
-whh does not care about the transport. It defines three messages:
-
-```
-Hello    { protocol: u16, space_id: SpaceId, base: Option<Key>, vv: [(SiteId, u64)] }
-Base     { key: Key, by: SiteId, state: bytes }
-Entries  { entries: [Entry], last: bool }
-```
-
-A session:
-
-1. Both sides send `Hello`.
-2. If `protocol` or `space_id` differ, close the session.
-3. If this side's base is newer than the peer's (the peer has none, or a smaller key), it sends `Base` first.
-4. Each side scans its log in key order and sends every entry the peer does not have yet. An entry `e` is sent if `e.hlc > peer_vv[e.site]` (use 0 if the peer does not list `e.site`) and its key is above the peer's base. Entries are sent in chunks of at most `max_entries_per_message`. The final chunk has `last = true`.
-5. Each side adopts a received `Base` (§9.4) and ingests every chunk it receives (§8.3).
-6. When it has sent its own last chunk and ingested the peer's last chunk, it runs `settle` (§8.4).
-
-Properties:
-
-- **Stateless.** Nothing about a session is stored. To resume, start a new session with a new `Hello`.
-- **Safe to interrupt** at any point. Every committed step keeps the prefix property.
-- **Idempotent.** Running a session twice changes nothing the second time.
-- **One round is enough.** After one complete session (with no deferred entries and no new writes during it), both sides hold the same base and the same set of entries above it.
-- **A new device needs no full history.** It receives the base and the entries above it.
-
-**Why entries are sent in key order.** Whh assumes that every entry may depend on every entry with a smaller key, whatever site wrote it. This is why entries are sent in key order. Each chunk is committed in its own transaction (§8.3), so a receiver may stop in the middle of a session. Even then, it never holds an entry without the entries it may depend on.
-
-The `Base` message can be large, because it holds the whole state. The transport may stream it.
-
-The wire encoding is the implementation's choice (for example, `postcard` with `serde`). It must include the `protocol` number.
-
----
-
-## 11. Why replicas converge
+## 10. Why replicas converge
 
 1. **Same base.** Only the administrator creates bases, and a newer base always replaces an older one. After all replicas have synced, all hold the same base.
 2. **Same log above the base.** Merging is set union. After all replicas have exchanged entries, all logs hold the same set above the base.
@@ -514,11 +516,11 @@ The wire encoding is the implementation's choice (for example, `postcard` with `
 4. **Same results.** The machine is deterministic and starts from the same `base_state` (§7). So every replica gets the same results at every position, the same final state, and the same `failed` set.
 5. **Direct apply equals replay.** When `dirty` is false, applying the entries above `W` in order extends the fold exactly. When a late entry arrives or the base changes, `dirty` forces a replay. So after every settle, `state = state(log)`.
 
-This argument needs two assumptions: no two different entries share a key (§12), and only one administrator creates bases (§9.1).
+This argument needs two assumptions: no two different entries share a key (§11), and only one administrator creates bases (§9.1).
 
 ---
 
-## 12. Integrity
+## 11. Integrity
 
 The only way to break convergence is **two different operations with the same key** (or two different bases with the same key, §9.4). Two replicas could each keep a different one, and the set union would never fix it.
 
@@ -529,17 +531,17 @@ This can only happen through bugs:
 
 Both are prevented by design. They are still checked, because the damage is silent and permanent.
 
-**Guard.** During ingest (§8.3), an entry with `hlc <= vv[site]` must already be in the log with identical `op` bytes. If the key is missing, or the bytes differ, ingest returns `Violation(site)` and rolls back the batch. Entries at or below the base cannot be checked, because they are deleted. They are ignored instead (§9.3).
+**Guard.** During ingest (§8.4), an entry with `hlc <= vv[site]` must already be in the log with identical `op` bytes. If the key is missing, or the bytes differ, ingest returns `Violation(site)` and rolls back the batch. Entries at or below the base cannot be checked, because they are deleted. They are ignored instead (§9.3).
 
 On a `Violation`, stop ingesting from that peer and report the site to the app. Do not try to repair anything automatically.
 
 ---
 
-## 13. Clock skew, admission, and limits
+## 12. Clock skew, admission, and limits
 
-### 13.1 Entries from the future
+### 12.1 Entries from the future
 
-`max_future_skew` (default: 10 minutes) limits how far ahead of the local wall clock an entry's physical time may be. An entry beyond this limit is **deferred**: it is not ingested now, and the rest of that site's entries in the batch are skipped (§8.3). The sender will send them again in a later session. They are accepted once the local clock catches up. The same rule applies to the key of a received base (§9.4).
+`max_future_skew` (default: 10 minutes) limits how far ahead of the local wall clock an entry's physical time may be. An entry beyond this limit is **deferred**: it is not ingested now, and the rest of that site's entries in the batch are skipped (§8.4). The sender will send them again in a later session. They are accepted once the local clock catches up. The same rule applies to the key of a received base (§9.4).
 
 **Why not accept it.** `observe()` would move the local clock far into the future. Every later local write would carry that future time and win every conflict. One device with a broken clock, or one malicious peer, could damage every replica permanently.
 
@@ -547,7 +549,7 @@ On a `Violation`, stop ingesting from that peer and report the site to the app. 
 
 **Cost.** A device whose clock runs ahead by more than the limit sees its entries delayed by the difference. This is accepted.
 
-### 13.2 Admission hook
+### 12.2 Admission hook
 
 The layer above may install an `admit(entry) -> bool` hook, for example to check a signature or a write permission. A refused entry is handled like a deferred one: that site is skipped for the rest of the batch, and the refusal is reported.
 
@@ -558,29 +560,29 @@ Two consequences:
 - A refusal blocks all later entries from the same site, because of the prefix property. A misbehaving site therefore stops being accepted at all.
 - `admit` should depend only on the entry and on configuration that every replica shares. If replicas use different rules, their logs may never become equal. (They still never diverge for the same log; they just never get the same log.)
 
-### 13.3 Limits
+### 12.3 Limits
 
 - `max_op_bytes` (default: 1 MiB)
 - `max_entries_per_message` (default: 1,000)
 
 ---
 
-## 14. Responsibilities of other layers
+## 13. Responsibilities of other layers
 
 whh guarantees that replicas converge. It says nothing about which writes are good.
 
 - **Machine.** Determinism. Reject non-deterministic operations at write time (for a SQL machine: `random()`, `datetime('now')`, `AUTOINCREMENT`, and similar). The app supplies ids and timestamps as values. Atomicity per operation. Exact export and import of state, if compaction is used.
-- **App: key design.** Primary keys must not collide across sites. Use ids that each site generates on its own: a UUID, or `SiteId` plus a local counter. If two sites insert the same key, one wins and the other is rejected, possibly after the fact (§8.5). Compaction does not fix this: two inserts above the base collide in the same way. A SQL machine can refuse table definitions with collision-prone keys as a guardrail.
+- **App: key design.** Primary keys must not collide across sites. Use ids that each site generates on its own: a UUID, or `SiteId` plus a local counter. If two sites insert the same key, one wins and the other is rejected, possibly after the fact (§8.6). Compaction does not fix this: two inserts above the base collide in the same way. A SQL machine can refuse table definitions with collision-prone keys as a guardrail.
 - **App: finality.** Who the administrator is, when to compact, and up to which key (§9.1). Whether it is safe to compact is the app's judgment.
-- **Permission layer.** Who may write what in a shared space, who may compact it, and signatures. whh accepts any well-formed entry as valid history, including a malicious one, such as a backdated `DROP TABLE`. Such entries must be refused before ingest (through `admit`, §13.2), or the space must not be shared with untrusted peers.
+- **Permission layer.** Who may write what in a shared space, who may compact it, and signatures. whh accepts any well-formed entry as valid history, including a malicious one, such as a backdated `DROP TABLE`. Such entries must be refused before ingest (through `admit`, §12.2), or the space must not be shared with untrusted peers.
 - **Transport (for example, iroh).** Connections, peer discovery, encryption in transit.
 
 ---
 
-## 15. Accepted costs and risks
+## 14. Accepted costs and risks
 
 1. **The log grows until the app compacts it.** Without compaction, about 15 MB per two years at Teller's rate. Accepted. To be measured.
-2. **Late entries change the visible state.** This is correct behavior, for example when an offline device catches up. Changes are reported (§8.5).
+2. **Late entries change the visible state.** This is correct behavior, for example when an offline device catches up. Changes are reported (§8.6).
 3. **A late entry causes a full replay.** Replay starts from the base, or from empty if there is no base. The cost grows with the log size above the base.
 4. **A misbehaving peer can cause repeated replays.** It can create backdated entries (each only needs to be above its own previous `hlc`), so each session triggers a replay. This is bounded by running settle at most once per session, prevented by the permission layer, and limited by compaction (entries at or below the base are ignored). It is a performance problem, not a convergence problem.
 5. **whh never refuses an entry for being old.** Only entries at or below the base are ignored, and only because the app compacted.
@@ -588,7 +590,7 @@ whh guarantees that replicas converge. It says nothing about which writes are go
 
 ---
 
-## 16. Possible later work (not now)
+## 15. Possible later work (not now)
 
 - **Partial replay** (for example, per table), if measurements show full replay is too slow. This would require the machine to declare which parts (e.g., tables) each operation reads and writes.
 - **Checkpoints above the base.** Cache the state at some key above the base, and throw the cache away when a late entry lands before it. Then a replay can start from one of the checkpoints instead of from the base.
@@ -597,16 +599,16 @@ whh guarantees that replicas converge. It says nothing about which writes are go
 
 ---
 
-## 17. Open items
+## 16. Open items
 
 - How machines version their behavior and their exported state, and what happens when devices in one space run different versions.
 - The exact shape of the `admit` hook, and how blocked sites and refused bases are reported.
-- Default values for the limits in §13.
+- Default values for the limits in §12.
 - How the app learns that it is safe to compact (for example, every known device reports its `vv` to the administrator).
 
 ---
 
-## 18. API sketch (not binding)
+## 17. API sketch (not binding)
 
 This is a starting point. Change it if a better shape appears during implementation.
 
@@ -683,13 +685,13 @@ impl<B: Backend, C: Clock> Replica<B, C> {
 whh ships two things for testing:
 
 - `MemBackend`: an in-memory backend that implements the transaction rules.
-- `KvMachine`: a small deterministic machine with export and import (see §20).
+- `KvMachine`: a small deterministic machine with export and import (see §19).
 
 Real backends and machines (for example, a SQLite backend and a SQL machine) live outside whh.
 
 ---
 
-## 19. Invariants
+## 18. Invariants
 
 Each of these must be checked by tests.
 
@@ -704,9 +706,9 @@ Each of these must be checked by tests.
 
 ---
 
-## 20. Test plan
+## 19. Test plan
 
-### 20.1 Test machine
+### 19.1 Test machine
 
 `KvMachine`, a key-value map with these operations:
 
@@ -717,12 +719,12 @@ Each of these must be checked by tests.
 
 It supports `export` and `import` (for example, by serializing the map).
 
-### 20.2 Unit tests
+### 19.2 Unit tests
 
 - HLC: `now()` is strictly increasing when the wall clock stands still, jumps forward, or jumps backward. Counter overflow carries into the physical part.
 - Key order: `hlc` first, then `site` bytes.
 
-### 20.3 Scenario tests (core)
+### 19.3 Scenario tests (core)
 
 1. **Late entry and last-writer-wins.** A writes `Put(k, 1)` at t=200. B writes `Put(k, 2)` at t=100 while offline. After sync, both show `k = 1`, and A reports `replayed`.
 2. **Rejected after the fact.** A writes `Insert(k, a)` at t=200 and it is applied. B writes `Insert(k, b)` at t=100 while offline. After sync, both show `k = b`. A's insert appears in A's `newly_failed`.
@@ -735,7 +737,7 @@ It supports `export` and `import` (for example, by serializing the map).
 9. **Fatal during replay.** Set the fault switch so that an `apply` in the middle of a replay returns `Fatal`. The replay aborts. Nothing is committed. After clearing the switch, settle produces the correct state.
 10. **Rejected local write.** It returns `Rejected`, and the log, `W`, and the state are unchanged.
 
-### 20.4 Scenario tests (compaction)
+### 19.4 Scenario tests (compaction)
 
 1. **Compact and spread.** A, B, and C are synced. A compacts at `K`. A syncs with B: B adopts the base, deletes its entries `<= K`, and has the same state as A. B syncs with C: C gets the base from B.
 2. **New device.** D is new. It syncs with A and receives the base and only the entries above it. D's state equals A's.
@@ -747,7 +749,7 @@ It supports `export` and `import` (for example, by serializing the map).
 8. **Conflicting base.** Two different sites create bases with the same key. Adopting the second one returns `ConflictingBase`, and nothing changes.
 9. **Restart after compaction.** All entries are compacted, and the replica restarts. `last` is restored from the base key, so the next local write gets a larger key.
 
-### 20.5 Property test (proptest)
+### 19.5 Property test (proptest)
 
 - 2 to 5 sites, each with its own test clock.
 - A random sequence of actions:
@@ -759,7 +761,7 @@ It supports `export` and `import` (for example, by serializing the map).
 - Check I1 to I8. Check that all states and `failed` sets are equal.
 - Also run the same action sequence without the `compact` actions. The final state must be the same. This checks that a correct compaction loses nothing.
 
-### 20.6 Deliverables
+### 19.6 Deliverables
 
-- **Week 0.** The `whh` crate with `Replica`, `MemBackend`, `KvMachine`, §8 without the base, and the tests in §20.2, §20.3, and §20.5 without `compact`.
+- **Week 0.** The `whh` crate with `Replica`, `MemBackend`, `KvMachine`, §8 without the base, and the tests in §19.2, §19.3, and §19.5 without `compact`.
 - **Phase 2.** Compaction (§9), the `Base` message, and the remaining tests.
