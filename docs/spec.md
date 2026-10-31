@@ -2,8 +2,8 @@
 
 > *What's happened, happened.*
 
-- Status: draft 2, ready for implementation (Week 0)
-- Date: 2026-10-09
+- Status: Draft
+- Date: 2026-10-31
 - Scope: the `whh` crate only. `daddb` (operations = SQL statements) is a separate spec.
 - Changes from draft 1: compaction is added (§9). Finality is an app decision, not a whh feature. whh only provides the minimal tools the app needs to compact a space.
 
