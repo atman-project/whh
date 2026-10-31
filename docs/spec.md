@@ -716,7 +716,6 @@ pub trait Transaction {
     fn append(&mut self, e: &Entry) -> Result<(), Self::Error>;
     fn get(&self, key: &Key) -> Result<Option<Vec<u8>>, Self::Error>;
     fn scan_after(&self, after: Option<&Key>) -> Result<Vec<Entry>, Self::Error>; // may become an iterator
-    fn scan_site_after(&self, site: &SiteId, hlc: Hlc) -> Result<Vec<Entry>, Self::Error>;
     fn delete_through(&mut self, key: &Key) -> Result<(), Self::Error>;          // compaction
     fn version_vector(&self) -> Result<Vec<(SiteId, Hlc)>, Self::Error>;
     fn meta(&self) -> Result<Meta, Self::Error>;

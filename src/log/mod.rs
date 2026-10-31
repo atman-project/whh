@@ -1,5 +1,5 @@
 pub use crate::log::key::Key;
-use crate::{hlc::HybridLogicalClock, site::SiteId, version::VersionVector};
+use crate::{hlc::HybridLogicalClock, version::VersionVector};
 
 mod key;
 
@@ -12,13 +12,9 @@ pub trait ReadOnlyLog {
     type Operation;
 
     fn get(&self, key: &Key) -> Option<&Self::Operation>;
+    /// Scan log entries after the key `after` (exclusive).
     fn scan_after(
         &self,
-        after: Option<&Key>,
-    ) -> Result<impl Iterator<Item = &Entry<Self::Operation>>, Error>;
-    fn scan_site_after(
-        &self,
-        site: &SiteId,
         after: Option<&Key>,
     ) -> Result<impl Iterator<Item = &Entry<Self::Operation>>, Error>;
     fn version_vector(&self) -> Result<VersionVector, Error>;
