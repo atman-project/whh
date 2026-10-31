@@ -83,10 +83,10 @@ This order is the same on every device. It never depends on when an entry arrive
 ### 3.4 State
 
 ```
-state(log) = fold(apply, base_state, entries of log sorted by key)
+state(log) = fold(apply, base.state, entries of log sorted by key)
 ```
 
-`base_state` is the empty state, unless the space was compacted. In that case it is the state saved in the base (§9.2), and the log holds only entries above the base.
+The fold starts from the base state (§3.5). The log holds only entries above the base key.
 
 This is the whole definition. Every other rule in this document exists to compute this function cheaply while entries keep arriving out of order.
 
@@ -102,6 +102,18 @@ This is the whole definition. Every other rule in this document exists to comput
 **Why a total order instead of commutative operations.** Classic operation-based CRDTs need operations that commute. SQL statements do not commute. A fixed total order removes this need: every replica applies the same entries in the same order, so any deterministic machine converges. The cost is that a late entry may force the entries after it to be applied again (§8.4).
 
 **Conflicts are resolved by the order.** When two entries touch the same thing, the entry with the larger key wins, because it is applied later. For daddb, two `UPDATE`s of the same column resolve as last-writer-wins by HLC. whh needs no other conflict rule.
+
+### 3.5 Base
+
+A **base** is the record that compaction creates (§9). It has three parts:
+
+- `base.key`: the **base key**. It is the compaction point `K`.
+- `base.by`: the `SiteId` of the replica that created the base.
+- `base.state`: the **base state**. It is the machine state after applying every entry with key `<= base.key`, in key order, starting from the empty state.
+
+A replica has at most one base. If it has none, the base state is the empty state, and there is no base key.
+
+In this document, "above the base" means "with a key greater than the base key", and "at or below the base" means "with a key less than or equal to the base key". The log never holds an entry at or below the base.
 
 ---
 
