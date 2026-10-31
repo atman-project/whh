@@ -451,6 +451,8 @@ compact(K):
 
 After `compact`, the state is unchanged: it was already `base_state` plus the entries above `K`.
 
+To get the state at `K`, the pseudocode resets the machine to the current base and replays the log. Some backends can do this more efficiently. For example, some SQL databases can copy the whole database.
+
 ### 9.3 Entries at or below the base
 
 Ingest ignores every entry with key `<= base.key` (§8.4). Such an entry is not stored, not applied, and causes no replay.
